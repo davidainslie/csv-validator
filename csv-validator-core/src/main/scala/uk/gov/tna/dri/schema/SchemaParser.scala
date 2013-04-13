@@ -40,16 +40,14 @@ trait SchemaParser extends RegexParsers {
 
   val regexParser: Parser[String] = Regex withFailureMessage("""regex not correctly delimited as ("your regex")""")
 
-  val pathSubstitutions: List[(String,String)]
+  val pathSubstitutions: List[(String, String)]
 
   def parseAndValidate(reader: Reader): ValidationNEL[FailMessage, Schema] = {
 
     //TODO following function works around a deficiency in scala.util.parsing.combinator.Parsers{$Error, $Failure} that use hard-coded Unix EOL in Scala 2.10.0
     def formatNoSuccessMessageForPlatform(s: String) = {
-      if(sys.props("os.name").toLowerCase.startsWith("win"))
-        s.replaceAll("([^\\r]?)\\n", "$1\r\n")
-      else
-        s
+      if (sys.props("os.name").toLowerCase.startsWith("win")) s.replaceAll("([^\\r]?)\\n", "$1\r\n")
+      else s
     }
 
     parse(reader) match {
@@ -91,35 +89,34 @@ trait SchemaParser extends RegexParsers {
 
   def columnDirective = positioned(optional | ignoreCase | warning)
 
-  def rule = positioned( and | or | nonConditionalRule | conditionalRule)
-
-  // def nonConditionalRule = unaryRule
-  def nonConditionalRule = opt( "$" ~> columnIdentifier <~ "/") ~ unaryRule ^^ { case explicitColumn ~ rule => rule.explicitColumn = explicitColumn; rule }
-
-  def conditionalRule = ifExpr
+  def rule = positioned( and | or | unaryRule | ifRule)
 
   def unaryRule =
-    parenthesesRule | in | is | isNot | starts | ends |
-    uniqueMultiExpr | uniqueExpr |
+    parentheses | in | is | isNot | starts | ends |
+    uniques | unique |
     regex | uuid4 | uri | xDateTimeRange | xDateTime | xDateRange | xDate | ukDateRange | ukDate | partUkDate | xTimeRange | xTime |
     fileExists | checksum | fileCount |
     positiveInteger | range | lengthExpr | failure("Invalid rule")
 
-  def parenthesesRule: Parser[ParenthesesRule] = "(" ~> rep1(rule) <~ ")" ^^ { ParenthesesRule(_) } | failure("unmatched paren")
+  def explicitColumnPrefix = opt( "$" ~> columnIdentifier <~ "/")
 
-  def or: Parser[OrRule] = nonConditionalRule ~ "or" ~ rule  ^^ { case lhs ~ _ ~ rhs => OrRule(lhs, rhs) }
+  def parentheses: Parser[ParenthesesRule] = "(" ~> rep1(rule) <~ ")" ^^ { ParenthesesRule(_) } | failure("unmatched parenthesis")
 
-  def and: Parser[AndRule] = nonConditionalRule ~ "and" ~ rule  ^^  { case lhs ~ _ ~ rhs =>  AndRule(lhs, rhs) }
+  def or: Parser[OrRule] = unaryRule ~ "or" ~ rule  ^^ { case lhs ~ _ ~ rhs => OrRule(lhs, rhs) }
 
-  def ifExpr: Parser[IfRule] = (("if(" ~> white ~> nonConditionalRule <~ white <~ "," <~ white) ~ (rep1(rule)) ~ opt((white ~> "," ~> white ~> rep1(rule))) <~ white <~ ")" ^^ {
+  def and: Parser[AndRule] = unaryRule ~ "and" ~ rule  ^^ { case lhs ~ _ ~ rhs =>  AndRule(lhs, rhs) }
+
+  def ifRule: Parser[IfRule] = (("if(" ~> white ~> unaryRule <~ white <~ "," <~ white) ~ (rep1(rule)) ~ opt((white ~> "," ~> white ~> rep1(rule))) <~ white <~ ")" ^^ {
     case cond ~ bdy ~ optBdy => IfRule(cond, bdy, optBdy)
   }) | failure("Invalid rule")
 
   def regex = "regex" ~> regexParser ^^ { s => RegexRule(s.dropRight(2).drop(2)) }
 
-  def in = "in(" ~> argProvider <~ ")" ^^ { InRule  }
+  def in = "in(" ~> argProvider <~ ")" ^^ { InRule }
 
-  def is = "is(" ~> argProvider <~ ")" ^^ { IsRule }
+  def is = explicitColumnPrefix into { (explicitColumn: Option[String]) =>
+    "is(" ~> argProvider <~ ")" ^^ { case ap => IsRule(ap)(explicitColumn) }
+  }
 
   def isNot = "isNot(" ~> argProvider <~ ")" ^^ { IsNotRule }
 
@@ -127,9 +124,9 @@ trait SchemaParser extends RegexParsers {
 
   def ends = "ends(" ~> argProvider <~ ")" ^^ { EndsRule }
 
-  def uniqueExpr: Parser[UniqueRule] = "unique" ^^^ UniqueRule()
+  def unique: Parser[UniqueRule] = "unique" ^^^ UniqueRule()
 
-  def uniqueMultiExpr: Parser[UniqueMultiRule] = "unique(" ~ white ~ "$" ~> columnIdentifier ~ rep( white ~ ',' ~ "$" ~> columnIdentifier ) <~ ")" ^^ { s => UniqueMultiRule( s._1 :: s._2 ) }
+  def uniques: Parser[UniqueMultiRule] = "unique(" ~ white ~ "$" ~> columnIdentifier ~ rep( white ~ ',' ~ "$" ~> columnIdentifier ) <~ ")" ^^ { s => UniqueMultiRule(s._1 :: s._2) }
 
   def uri: Parser[UriRule] = "uri" ^^^ UriRule()
 
@@ -137,7 +134,7 @@ trait SchemaParser extends RegexParsers {
 
   def xDateTimeExpr: Parser[String] = """[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}""".r
 
-  def xDateTimeRange: Parser[XsdDateTimeRangeRule] = (("xDateTime(" ~> white) ~> xDateTimeExpr <~ (white <~ "," <~ white)) ~ xDateTimeExpr <~ (white ~ ")") ^^  {
+  def xDateTimeRange: Parser[XsdDateTimeRangeRule] = (("xDateTime(" ~> white) ~> xDateTimeExpr <~ (white <~ "," <~ white)) ~ xDateTimeExpr <~ (white ~ ")") ^^ {
     case from ~ to => XsdDateTimeRangeRule(from, to)
   }
 
@@ -145,7 +142,7 @@ trait SchemaParser extends RegexParsers {
 
   def xsdDateExpr: Parser[String] = "[0-9]{4}-[0-9]{2}-[0-9]{2}".r
 
-  def xDateRange: Parser[XsdDateRangeRule] = (("xDate(" ~> white) ~> xsdDateExpr <~ (white <~ "," <~ white)) ~ xsdDateExpr <~ (white ~ ")") ^^  {
+  def xDateRange: Parser[XsdDateRangeRule] = (("xDate(" ~> white) ~> xsdDateExpr <~ (white <~ "," <~ white)) ~ xsdDateExpr <~ (white ~ ")") ^^ {
     case from ~ to => XsdDateRangeRule(from, to)
   }
 
@@ -155,7 +152,7 @@ trait SchemaParser extends RegexParsers {
 
   val ukDateExpr: Parser[String] = "[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}".r
 
-  def ukDateRange: Parser[UkDateRangeRule] = (("ukDate(" ~> white) ~> ukDateExpr <~ (white <~ "," <~ white)) ~ ukDateExpr <~ (white ~ ")") ^^  {
+  def ukDateRange: Parser[UkDateRangeRule] = (("ukDate(" ~> white) ~> ukDateExpr <~ (white <~ "," <~ white)) ~ ukDateExpr <~ (white ~ ")") ^^ {
     case from ~ to => UkDateRangeRule(from, to)
   }
 
@@ -213,7 +210,7 @@ trait SchemaParser extends RegexParsers {
 
   private def validate(g: List[GlobalDirective], c: List[ColumnDefinition]): String = {
     globDirectivesValid(g) ::totalColumnsValid(g, c) :: columnDirectivesValid(c) :: duplicateColumnsValid(c) :: crossColumnsValid(c) :: checksumAlgorithmValid(c) ::
-    rangeValid(c) :: lengthValid(c) :: regexValid(c) :: dateRangeValid(c) :: uniqueMultiValid(c) :: explicitColumnValid(c) :: Nil collect { case Some(s: String) => s } mkString(EOL)
+      rangeValid(c) :: lengthValid(c) :: regexValid(c) :: dateRangeValid(c) :: uniqueMultiValid(c) :: explicitColumnValid(c) :: Nil collect { case Some(s: String) => s } mkString(EOL)
   }
 
   private def totalColumnsValid(g: List[GlobalDirective], c: List[ColumnDefinition]): Option[String] = {
@@ -246,7 +243,7 @@ trait SchemaParser extends RegexParsers {
       if (cd.directives.distinct.length != cd.directives.length)
     } yield {
       s"${cd.id}: Duplicated column directives: " +
-      cd.directives.groupBy(identity).filter { case (_, cds) => cds.size > 1}.map { case (cdId, _) => "@" + cdId + s" at line: ${cdId.pos.line}, column: ${cdId.pos.column}"}.mkString(", ")
+        cd.directives.groupBy(identity).filter { case (_, cds) => cds.size > 1}.map { case (cdId, _) => "@" + cdId + s" at line: ${cdId.pos.line}, column: ${cdId.pos.column}"}.mkString(", ")
     }
 
     if (v.isEmpty) None else Some(v.mkString(EOL))
@@ -425,17 +422,17 @@ trait SchemaParser extends RegexParsers {
         Some((cond ++ cons ++ alt).flatten.toList)
 
       case AndRule(lf,rt) =>
-         val left = explicitColumnCheck(lf)
-         val right = explicitColumnCheck(rt)
-         Some((left ++ right ).flatten.toList)
+        val left = explicitColumnCheck(lf)
+        val right = explicitColumnCheck(rt)
+        Some((left ++ right ).flatten.toList)
 
       case OrRule(lf,rt) =>
-         val left = explicitColumnCheck(lf)
-         val right = explicitColumnCheck(rt)
-         Some((left ++ right ).flatten.toList)
+        val left = explicitColumnCheck(lf)
+        val right = explicitColumnCheck(rt)
+        Some((left ++ right ).flatten.toList)
 
       case ParenthesesRule(l) =>
-        l.foldLeft(Some(List.empty[String])) { case (l,r) => Some((l ++  explicitColumnCheck(r)).flatten.toList) }
+        l.foldLeft(Some(List.empty[String])) { case (l, r) => Some((l ++ explicitColumnCheck(r)).flatten.toList) }
 
       case _ => rule.explicitColumn match {
         case Some(columnName) =>  if (!columnDefinitions.map(_.id).contains(columnName)) Some(List(columnName)) else None
@@ -447,7 +444,7 @@ trait SchemaParser extends RegexParsers {
       cd <- columnDefinitions
       rule <- cd.rules
       errorColumn = explicitColumnCheck(rule)
-      if( errorColumn.isDefined && errorColumn.get.length > 0)
+      if (errorColumn.isDefined && errorColumn.get.length > 0)
     } yield  s"""Column: ${cd.id}: Invalid explicit column ${errorColumn.get.mkString(", ")}: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
 
     if (result.isEmpty) None else Some(result.mkString(EOL))

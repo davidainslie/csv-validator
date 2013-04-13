@@ -17,18 +17,16 @@ import uk.gov.tna.dri.metadata.Row
 import util.Try
 import annotation.tailrec
 import java.net.URI
-import org.joda.time.{Interval, LocalTime, DateTime}
-import org.joda.time.format.{DateTimeFormatter, DateTimeFormatterBuilder, ISODateTimeFormat, DateTimeFormat}
+import org.joda.time.{Interval, DateTime}
+import org.joda.time.format.{DateTimeFormatterBuilder, ISODateTimeFormat, DateTimeFormat}
 import scalaz.{Success => SuccessZ, Failure => FailureZ}
 import java.util.regex.{Pattern, Matcher}
 import scala.Some
 import uk.gov.tna.dri.{UNIX_FILE_SEPARATOR, WINDOWS_FILE_SEPARATOR, FILE_SEPARATOR, URI_PATH_SEPARATOR}
 
-abstract class Rule(name: String, val argProviders: ArgProvider*) extends Positional {
+abstract class Rule(name: String, val argProviders: ArgProvider*)(implicit val explicitColumn: Option[String] = None) extends Positional {
 
   type RuleValidation[A] = ValidationNEL[String, A]
-
-  var explicitColumn: Option[String] = None
 
   def evaluate(columnIndex: Int, row: Row, schema: Schema): RuleValidation[Any] = {
     if (valid(cellValue(columnIndex, row, schema), schema.columnDefinitions(columnIndex), columnIndex, row, schema)) true.successNel[String] else fail(columnIndex, row, schema)
@@ -122,17 +120,11 @@ case class IfRule(condition: Rule, rules: List[Rule], elseRules: Option[List[Rul
     }
 
     val v = if (condition.valid(cellValue, schema.columnDefinitions(columnIndex), idx, row, schema)) {
-     for (rule <- rules) yield {
-        rule.evaluate(columnIndex, row, schema)
-      }
+      for (rule <- rules) yield rule.evaluate(columnIndex, row, schema)
+    } else if (elseRules.isDefined) {
+      for (rule <- elseRules.get) yield rule.evaluate(columnIndex, row, schema)
     } else {
-      if (elseRules.isDefined) {
-        for (rule <- elseRules.get) yield {
-          rule.evaluate(columnIndex, row, schema)
-        }
-      } else {
-        Nil
-      }
+      Nil
     }
 
     v.sequence[RuleValidation, Any]
@@ -187,7 +179,7 @@ case class InRule(inValue: ArgProvider) extends Rule("in", inValue) {
   }
 }
 
-case class IsRule(isValue: ArgProvider) extends Rule("is", isValue) {
+case class IsRule(isValue: ArgProvider)(implicit explicitColumn: Option[String] = None) extends Rule("is", isValue)(explicitColumn) {
   def valid(cellValue: String, columnDefinition: ColumnDefinition, columnIndex: Int, row: Row, schema: Schema): Boolean = {
     val ruleValue = isValue.referenceValue(columnIndex, row, schema)
 
@@ -237,9 +229,9 @@ object XsdDateParser extends DateParser {
   val xsdDateFormatter = new DateTimeFormatterBuilder()
     .append(ISODateTimeFormat.dateElementParser)
     .appendOptional(
-      new DateTimeFormatterBuilder()
-        .appendTimeZoneOffset("Z", true, 2, 4).toParser
-    ).toFormatter
+    new DateTimeFormatterBuilder()
+      .appendTimeZoneOffset("Z", true, 2, 4).toParser
+  ).toFormatter
 
   def parse(dateStr: String): Try[DateTime] = Try(DateTime.parse(dateStr, xsdDateFormatter))
 }
@@ -487,7 +479,7 @@ case class FileCountRule(rootPath: ArgProvider, file: ArgProvider, pathSubstitut
   }
 
   private def filename(columnIndex: Int, row: Row, schema: Schema): (String,String) = {  // return (base,path)
-    val f = file.referenceValue(columnIndex, row, schema).get
+  val f = file.referenceValue(columnIndex, row, schema).get
 
     rootPath.referenceValue(columnIndex, row, schema) match {
       case None => ("",f)
@@ -556,7 +548,7 @@ trait FileWildcardSearch[T] {
     def apply(path : String) : TypedPath = {
       val fileUriMatcher = fileUriPattern.matcher(path)
       if(fileUriMatcher.matches) {
-       val fileUriPathMatcher = fileUriPathPattern.matcher(path)
+        val fileUriPathMatcher = fileUriPathPattern.matcher(path)
         new FileUriPath(fileUriMatcher.replaceFirst("$2$3$4"), fileUriPathMatcher.replaceFirst("$1$2$3"))
       } else if(path.contains(UNIX_FILE_SEPARATOR) && !path.contains(WINDOWS_FILE_SEPARATOR)) {
         new UnixPath(path)
@@ -568,19 +560,29 @@ trait FileWildcardSearch[T] {
 
   case class FileUriPath(uriPrefix : String, path: String) extends TypedPath {
     def toURI : URI = new URI(uriPrefix + FileSystem.file2PlatformIndependent(path))
+
     override def toString : String = toURI.toString
-    override protected def construct(p : String) = new FileUriPath(uriPrefix, p);
+
+    override protected def construct(p : String) = new FileUriPath(uriPrefix, p)
+
     override def toPlatform = this
   }
+
   case class WindowsPath(path : String) extends TypedPath {
     override val separator = WINDOWS_FILE_SEPARATOR
+
     override def toString = FileSystem.file2WindowsPlatform(path)
+
     override protected def construct(p : String) = new WindowsPath(p)
+
     override def toPlatform = if(isWindowsPlatform) this else new UnixPath(FileSystem.file2UnixPlatform(path))
   }
+
   case class UnixPath(path : String) extends TypedPath {
     override def toString = FileSystem.file2UnixPlatform(path)
+
     override protected def construct(p: String) = new UnixPath(p)
+
     override def toPlatform = if(isWindowsPlatform) new WindowsPath(FileSystem.file2WindowsPlatform(path)) else this
   }
 
@@ -665,7 +667,7 @@ case class RangeRule(min: BigDecimal, max: BigDecimal) extends Rule("range") {
     Try[BigDecimal]( BigDecimal(cellValue)) match {
       case scala.util.Success(callDecimal) => if (callDecimal >= min && callDecimal <= max  ) true  else false
       case _ => false
-     }
+    }
   }
 
   override def toError = s"""$ruleName($min,$max)"""
