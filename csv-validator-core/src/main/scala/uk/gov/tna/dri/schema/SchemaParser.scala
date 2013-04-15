@@ -16,7 +16,6 @@ import scalaz._
 import Scalaz._
 import uk.gov.tna.dri.EOL
 import uk.gov.tna.dri.validator.{SchemaMessage, FailMessage}
-import scala.util.parsing.input.{OffsetPosition, Position}
 
 trait SchemaParser extends RegexParsers {
 
@@ -98,7 +97,7 @@ trait SchemaParser extends RegexParsers {
     fileExists | checksum | fileCount |
     positiveInteger | range | lengthExpr | failure("Invalid rule")
 
-  def explicitColumnPrefix = opt( "$" ~> columnIdentifier <~ "/")
+  def explicitColumn = opt( "$" ~> columnIdentifier <~ "/")
 
   def parentheses: Parser[ParenthesesRule] = "(" ~> rep1(rule) <~ ")" ^^ { ParenthesesRule(_) } | failure("unmatched parenthesis")
 
@@ -114,7 +113,7 @@ trait SchemaParser extends RegexParsers {
 
   def in = "in(" ~> argProvider <~ ")" ^^ { InRule }
 
-  def is = explicitColumnPrefix into { (explicitColumn: Option[String]) =>
+  def is = explicitColumn into { (explicitColumn: Option[String]) =>
     "is(" ~> argProvider <~ ")" ^^ { case ap => IsRule(ap)(explicitColumn) }
   }
 
@@ -209,8 +208,19 @@ trait SchemaParser extends RegexParsers {
   }
 
   private def validate(g: List[GlobalDirective], c: List[ColumnDefinition]): String = {
-    globDirectivesValid(g) ::totalColumnsValid(g, c) :: columnDirectivesValid(c) :: duplicateColumnsValid(c) :: crossColumnsValid(c) :: checksumAlgorithmValid(c) ::
-      rangeValid(c) :: lengthValid(c) :: regexValid(c) :: dateRangeValid(c) :: uniqueMultiValid(c) :: explicitColumnValid(c) :: Nil collect { case Some(s: String) => s } mkString(EOL)
+    globDirectivesValid(g) ::
+    totalColumnsValid(g, c) ::
+    columnDirectivesValid(c) ::
+    duplicateColumnsValid(c) ::
+    crossColumnsValid(c) ::
+    checksumAlgorithmValid(c) ::
+    rangeValid(c) ::
+    lengthValid(c) ::
+    regexValid(c) ::
+    dateRangeValid(c) ::
+    uniqueMultiValid(c) ::
+    explicitColumnValid(c) ::
+    Nil collect { case Some(s: String) => s } mkString(EOL)
   }
 
   private def totalColumnsValid(g: List[GlobalDirective], c: List[ColumnDefinition]): Option[String] = {
@@ -267,8 +277,8 @@ trait SchemaParser extends RegexParsers {
       if (algorithmCheck(rule))
     } yield {
       rule match {
-        case checksum:ChecksumRule => s"""Column: ${cd.id}: Invalid Algorithm: '${checksum.algorithm}' at line: ${rule.pos.line}, column: ${rule.pos.column}"""
-        case _ =>  s"""Column: ${cd.id}: Invalid Algorithm: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
+        case checksum: ChecksumRule => s"""Column: ${cd.id}: Invalid Algorithm: '${checksum.algorithm}' at line: ${rule.pos.line}, column: ${rule.pos.column}"""
+        case _ => s"""Column: ${cd.id}: Invalid Algorithm: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
       }
     }
 
@@ -277,7 +287,7 @@ trait SchemaParser extends RegexParsers {
 
   private def rangeValid(columnDefinitions: List[ColumnDefinition]): Option[String] = {
     def rangeCheck(rule: Rule): Boolean = rule match {
-      case RangeRule(min,max) => min > max
+      case RangeRule(min, max) => min > max
       case _ => false
     }
 
@@ -288,7 +298,7 @@ trait SchemaParser extends RegexParsers {
     } yield {
       rule match {
         case range:RangeRule => s"""Column: ${cd.id}: Invalid range, minimum greater than maximum in: 'range(${range.min},${range.max})' at line: ${rule.pos.line}, column: ${rule.pos.column}"""
-        case _ =>  s"""Column: ${cd.id}: Invalid range, minimum greater than maximum: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
+        case _ => s"""Column: ${cd.id}: Invalid range, minimum greater than maximum: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
       }
     }
 
@@ -308,7 +318,7 @@ trait SchemaParser extends RegexParsers {
     } yield {
       rule match {
         case len:LengthRule => s"""Column: ${cd.id}: Invalid length, minimum greater than maximum in: 'length(${len.from.getOrElse("")},${len.to})' at line: ${rule.pos.line}, column: ${rule.pos.column}"""
-        case _ =>  s"""Column: ${cd.id}: Invalid length, minimum greater than maximum: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
+        case _ => s"""Column: ${cd.id}: Invalid length, minimum greater than maximum: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
       }
     }
 
@@ -341,7 +351,7 @@ trait SchemaParser extends RegexParsers {
 
   private def regexValid(columnDefinitions: List[ColumnDefinition]): Option[String] = {
     def regexCheck(rule: Rule): Boolean = rule match {
-      case RegexRule(s) =>  Try(s.r).isFailure
+      case RegexRule(s) => Try(s.r).isFailure
       case _ => false
     }
 
@@ -357,7 +367,7 @@ trait SchemaParser extends RegexParsers {
   private def dateRangeValid(columnDefinitions: List[ColumnDefinition]): Option[String] = {
 
     def dateCheck(rule: Rule): Boolean = rule match {
-      case dateRule: DateRangeRule =>  {
+      case dateRule: DateRangeRule => {
         val diff = for (frmDt <- dateRule.fromDate; toDt <- dateRule.toDate) yield frmDt.isBefore(toDt) || frmDt.isEqual(toDt)
 
         diff match {
@@ -382,9 +392,9 @@ trait SchemaParser extends RegexParsers {
     def uniqueMultiCheck(rule: Rule): Option[List[String]] = rule match {
       case UniqueMultiRule(columns) =>
         val actualColumns:List[String] =  columnDefinitions.map( _.id)
-        val invalidColumn = columns.filterNot( f => actualColumns.exists(_ == f))
+        val invalidColumn = columns.filterNot(f => actualColumns.exists(_ == f))
 
-        if ( invalidColumn.isEmpty) None else Some(invalidColumn)
+        if (invalidColumn.isEmpty) None else Some(invalidColumn)
 
       case _ => None
     }
@@ -407,15 +417,15 @@ trait SchemaParser extends RegexParsers {
     }
 
     def checkAlternativeOption(rules: Option[List[Rule]]): Option[List[String]] = rules match {
-      case Some(rulesList) => Some( rulesList.foldLeft(List.empty[String]) {
-        case (list, rule: Rule) =>  list ++ invalidColumnNames(rule)
+      case Some(rulesList) => Some(rulesList.foldLeft(List.empty[String]) {
+        case (list, rule: Rule) => list ++ invalidColumnNames(rule)
       })
 
       case None => None
     }
 
     def explicitColumnCheck(rule: Rule): Option[List[String]] = rule match {
-      case IfRule(c,t,f) =>
+      case IfRule(c, t, f) =>
         val cond = explicitColumnCheck(c)
         val cons = t.foldLeft(Some(List.empty[String])) { case (l, r) => Some((l ++  explicitColumnCheck(r)).flatten.toList) }
         val alt = checkAlternativeOption(f)
@@ -445,7 +455,7 @@ trait SchemaParser extends RegexParsers {
       rule <- cd.rules
       errorColumn = explicitColumnCheck(rule)
       if (errorColumn.isDefined && errorColumn.get.length > 0)
-    } yield  s"""Column: ${cd.id}: Invalid explicit column ${errorColumn.get.mkString(", ")}: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
+    } yield s"""Column: ${cd.id}: Invalid explicit column ${errorColumn.get.mkString(", ")}: at line: ${rule.pos.line}, column: ${rule.pos.column}"""
 
     if (result.isEmpty) None else Some(result.mkString(EOL))
   }
